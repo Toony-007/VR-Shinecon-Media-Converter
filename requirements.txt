@@ -1,0 +1,20 @@
+# ==============================================================================
+# PROYECTO: VR Shinecon Media Converter
+# ARCHIVO: requirements.txt
+# DESCRIPCIÓN: Lista de dependencias oficiales para ejecutar la aplicación.
+# ==============================================================================
+
+# Interfaz gráfica moderna con soporte nativo de modo oscuro y temas personalizados
+customtkinter>=5.2.0
+
+# Procesamiento y manipulación avanzada de imágenes y texturas ópticas
+Pillow>=10.0.0
+
+# Envoltorio de alto nivel en Python para procesamiento FFmpeg
+ffmpeg-python>=0.2.0
+
+# Detección automática del tema del sistema operativo (claro/oscuro)
+darkdetect>=0.8.0
+
+# Captura de pantalla a ultra alta velocidad para streaming y proyección VR en vivo
+mss>=9.0.0

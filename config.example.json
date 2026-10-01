@@ -1,0 +1,14 @@
+{
+    "language": "es",
+    "theme": "Dark",
+    "export_directory": "",
+    "default_mode": "auto",
+    "default_crf": 18,
+    "default_sbs_mode": "half",
+    "default_resolution": "1080p",
+    "default_container": "mp4",
+    "default_encoder": "cpu",
+    "parallax_depth": 0,
+    "audio_codec": "copy",
+    "notify_on_complete": true
+}
