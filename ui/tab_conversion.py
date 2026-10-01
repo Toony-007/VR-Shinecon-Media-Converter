@@ -158,6 +158,7 @@ class ConversionTab(ctk.CTkFrame):
 
         # Menú desplegable de plantillas predefinidas
         self.template_keys = [
+            "virtual_cinema_full",
             "vr_shinecon_1_1",
             "vr180_lens_mask",
             "virtual_cinema_16_9",
@@ -179,7 +180,7 @@ class ConversionTab(ctk.CTkFrame):
         # Descripción dinámica de la plantilla activa
         self.lbl_tmpl_desc = ctk.CTkLabel(
             self.template_card,
-            text=self.loc_mgr.t(LensMaskGenerator.PRESET_TEMPLATES["vr_shinecon_1_1"].desc_key),
+            text=self.loc_mgr.t(LensMaskGenerator.PRESET_TEMPLATES["virtual_cinema_full"].desc_key),
             wraplength=440,
             justify="left",
             font=ctk.CTkFont(size=11),
@@ -298,7 +299,32 @@ class ConversionTab(ctk.CTkFrame):
             command=self._on_gap_slider_changed
         )
         self.slider_center_gap.set(0.04)
-        self.slider_center_gap.grid(row=13, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 15))
+        self.slider_center_gap.grid(row=13, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 8))
+
+        # Control 6: Escala de Campo de Visión (FOV / Zoom de Pantalla)
+        self.lbl_scale = ctk.CTkLabel(
+            self.template_card,
+            text=self.loc_mgr.t("label_content_scale"),
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.lbl_scale.grid(row=14, column=0, columnspan=2, sticky="w", padx=15, pady=(4, 2))
+
+        self.lbl_scale_indicator = ctk.CTkLabel(
+            self.template_card,
+            text="95% (Pantalla Alejada / 100% Contenido Visible)",
+            font=ctk.CTkFont(size=11)
+        )
+        self.lbl_scale_indicator.grid(row=15, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 2))
+
+        self.slider_content_scale = ctk.CTkSlider(
+            self.template_card,
+            from_=0.50,
+            to=1.50,
+            number_of_steps=20,
+            command=self._on_scale_slider_changed
+        )
+        self.slider_content_scale.set(0.95)
+        self.slider_content_scale.grid(row=16, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 15))
 
         # ----------------------------------------------------------------------
         # TARJETA 3: OPCIONES TÉCNICAS (RESOLUCIÓN, CÓDEC, CRF, PARALLAX)
@@ -791,7 +817,28 @@ class ConversionTab(ctk.CTkFrame):
             fit_text = self.loc_mgr.t("opt_fit_crop") if tmpl.fit_mode == "crop" else self.loc_mgr.t("opt_fit_letterbox")
             self.opt_fit.set(fit_text)
 
+            # Escala FOV
+            scale_val = getattr(tmpl, "content_scale", 1.0)
+            self.slider_content_scale.set(scale_val)
+            self._on_scale_slider_changed(scale_val, trigger_preview=False)
+
         self._on_params_changed()
+
+    def _on_scale_slider_changed(self, value: float, trigger_preview: bool = True) -> None:
+        """
+        Maneja cambios en el slider de escala de campo de visión (FOV / Zoom).
+        """
+        pct = int(round(value * 100))
+        if pct == 100:
+            desc = "100% (Tamaño de Ventana Estándar)"
+        elif pct < 100:
+            desc = f"{pct}% (Pantalla Alejada / 100% Contenido Visible)"
+        else:
+            desc = f"{pct}% (Zoom / Acercamiento Inmersivo)"
+
+        self.lbl_scale_indicator.configure(text=desc)
+        if trigger_preview:
+            self._on_params_changed()
 
     def _on_corner_slider_changed(self, value: float, trigger_preview: bool = True) -> None:
         """
@@ -913,7 +960,8 @@ class ConversionTab(ctk.CTkFrame):
                 corner_radius_pct=options.corner_radius_pct,
                 margin_pct=options.margin_pct,
                 center_gap_pct=options.center_gap_pct,
-                parallax_px=options.parallax_depth
+                parallax_px=options.parallax_depth,
+                content_scale=options.content_scale
             )
             self._last_composed_preview = sbs_composite
 
@@ -931,9 +979,10 @@ class ConversionTab(ctk.CTkFrame):
             # Actualizamos pie descriptivo
             file_name = self.selected_preview_item.file_name if self.selected_preview_item else ""
             asp_str = options.aspect_mode.upper()
+            fov_pct = int(round(options.content_scale * 100))
             rad_pct = int(options.corner_radius_pct * 100)
             self.lbl_preview_footer.configure(
-                text=f"{file_name}  |  Aspecto: {asp_str}  |  Esquinas: {rad_pct}%  |  Parallax: {options.parallax_depth}px"
+                text=f"{file_name}  |  Aspecto: {asp_str}  |  FOV: {fov_pct}%  |  Esquinas: {rad_pct}%  |  Parallax: {options.parallax_depth}px"
             )
 
         except Exception as error:
@@ -973,7 +1022,7 @@ class ConversionTab(ctk.CTkFrame):
         """
         # Plantilla
         template_choice = self.opt_template.get()
-        chosen_id = "vr_shinecon_1_1"
+        chosen_id = "virtual_cinema_full"
         for k in self.template_keys:
             if self.loc_mgr.t(LensMaskGenerator.PRESET_TEMPLATES[k].name_key) == template_choice:
                 chosen_id = k
@@ -994,12 +1043,15 @@ class ConversionTab(ctk.CTkFrame):
 
         # Modo de ajuste
         fit_choice = self.opt_fit.get()
-        fit_opt = "crop" if ("Rellenar" in fit_choice or "Crop" in fit_choice) else "fit"
+        fit_opt = "crop" if ("Rellenar" in fit_choice or "Crop" in fit_choice or "Inmersivo" in fit_choice) else "fit"
 
         # Curvatura y márgenes
         corner_r = float(self.slider_corner_radius.get())
         margin_val = float(self.slider_margin.get())
         gap_val = float(self.slider_center_gap.get())
+
+        # Escala FOV
+        scale_val = float(self.slider_content_scale.get())
 
         # Resolución
         res_text = self.opt_res.get()
@@ -1047,6 +1099,7 @@ class ConversionTab(ctk.CTkFrame):
             corner_radius_pct=corner_r,
             margin_pct=margin_val,
             center_gap_pct=gap_val,
+            content_scale=scale_val,
             sbs_mode="half",
             resolution=res_opt,
             container=container_opt,

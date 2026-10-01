@@ -65,13 +65,14 @@ class StreamingTab(ctk.CTkFrame):
         self._windows: List[Tuple[int, str]] = []
 
         # Parámetros ópticos en memoria
-        self.current_template_id: str = "vr_shinecon_1_1"
-        self.current_aspect_mode: str = "1:1"
-        self.current_fit_mode: str = "crop"
-        self.current_corner_radius: float = 0.45
+        self.current_template_id: str = "virtual_cinema_full"
+        self.current_aspect_mode: str = "original"
+        self.current_fit_mode: str = "fit"
+        self.current_corner_radius: float = 0.15
         self.current_margin: float = 0.04
         self.current_center_gap: float = 0.04
         self.current_parallax: int = 0
+        self.current_content_scale: float = 0.95
         self.current_fps: int = 60
 
         # Suscripción a cambios de idioma
@@ -196,6 +197,7 @@ class StreamingTab(ctk.CTkFrame):
         lbl_template.grid(row=1, column=0, sticky="w", padx=15, pady=4)
 
         template_display_names = [
+            "Cine Virtual Completo (100% Contenido / Sin Recorte)",
             "VR Shinecon 1:1 (Lentes Cuadradas / Anti-estiramiento)",
             "VR180 Domo Estereoscópico",
             "Cine Virtual 16:9 Flotante",
@@ -222,7 +224,7 @@ class StreamingTab(ctk.CTkFrame):
             number_of_steps=100,
             command=self._on_slider_changed
         )
-        self.slider_corner.set(0.45)
+        self.slider_corner.set(0.15)
         self.slider_corner.grid(row=2, column=1, sticky="ew", padx=15, pady=4)
 
         # Control deslizante: Margen exterior
@@ -265,7 +267,53 @@ class StreamingTab(ctk.CTkFrame):
             command=self._on_slider_changed
         )
         self.slider_parallax.set(0)
-        self.slider_parallax.grid(row=5, column=1, sticky="ew", padx=15, pady=(4, 15))
+        self.slider_parallax.grid(row=5, column=1, sticky="ew", padx=15, pady=4)
+
+        # Control: Modo de Ajuste en Ventana (Fit vs Crop)
+        self.lbl_fit = ctk.CTkLabel(self.card_optical, text="Modo de Ajuste:", font=ctk.CTkFont(size=12))
+        self.lbl_fit.grid(row=6, column=0, sticky="w", padx=15, pady=4)
+
+        self.opt_fit = ctk.CTkOptionMenu(
+            self.card_optical,
+            values=[
+                "Ajustar al Marco (100% Visible / Sin recortes)",
+                "Rellenar Lente (Recorte inmersivo)"
+            ],
+            command=self._on_fit_mode_selected
+        )
+        self.opt_fit.set("Ajustar al Marco (100% Visible / Sin recortes)")
+        self.opt_fit.grid(row=6, column=1, sticky="ew", padx=15, pady=4)
+
+        # Control deslizante: Escala / FOV (Zoom de Pantalla)
+        self.lbl_scale = ctk.CTkLabel(self.card_optical, text="Escala / FOV:", font=ctk.CTkFont(size=12))
+        self.lbl_scale.grid(row=7, column=0, sticky="w", padx=15, pady=4)
+
+        self.slider_scale = ctk.CTkSlider(
+            self.card_optical,
+            from_=0.50,
+            to=1.50,
+            number_of_steps=100,
+            command=self._on_slider_changed
+        )
+        self.slider_scale.set(0.95)
+        self.slider_scale.grid(row=7, column=1, sticky="ew", padx=15, pady=4)
+
+        self.lbl_scale_indicator = ctk.CTkLabel(
+            self.card_optical,
+            text="95% (Pantalla Alejada / 100% Contenido Visible)",
+            font=ctk.CTkFont(size=11),
+            text_color="#94a3b8"
+        )
+        self.lbl_scale_indicator.grid(row=8, column=1, sticky="w", padx=15, pady=(0, 4))
+
+        # Indicador de atajo de teclado y rueda del ratón
+        self.lbl_zoom_hint = ctk.CTkLabel(
+            self.card_optical,
+            text="💡 En Pantalla Completa: Rueda del Ratón o teclas + / - para Zoom en vivo",
+            font=ctk.CTkFont(size=11, slant="italic"),
+            text_color="#38bdf8"
+        )
+        self.lbl_zoom_hint.grid(row=9, column=0, columnspan=2, sticky="w", padx=15, pady=(4, 15))
 
         # ----------------------------------------------------------------------
         # TARJETA 3: Proyección en Pantalla Completa en la PC (Fila 1, span 2)
@@ -444,41 +492,54 @@ class StreamingTab(ctk.CTkFrame):
         """
         Aplica los parámetros de la plantilla óptica seleccionada.
         """
-        if "1:1" in choice:
+        if "Completo" in choice or "Sin Recorte" in choice:
+            self.current_template_id = "virtual_cinema_full"
+            self.current_aspect_mode = "original"
+            self.current_fit_mode = "fit"
+            self.current_corner_radius = 0.15
+            self.current_margin = 0.04
+            self.current_center_gap = 0.04
+            self.current_content_scale = 0.95
+        elif "1:1" in choice:
             self.current_template_id = "vr_shinecon_1_1"
             self.current_aspect_mode = "1:1"
             self.current_fit_mode = "crop"
             self.current_corner_radius = 0.45
             self.current_margin = 0.04
             self.current_center_gap = 0.04
+            self.current_content_scale = 1.0
         elif "VR180" in choice:
             self.current_template_id = "vr180_lens_mask"
             self.current_aspect_mode = "1:1"
             self.current_fit_mode = "crop"
-            self.current_corner_radius = 0.95
-            self.current_margin = 0.02
-            self.current_center_gap = 0.03
+            self.current_corner_radius = 0.75
+            self.current_margin = 0.03
+            self.current_center_gap = 0.05
+            self.current_content_scale = 1.0
         elif "16:9" in choice:
             self.current_template_id = "virtual_cinema_16_9"
             self.current_aspect_mode = "16:9"
-            self.current_fit_mode = "letterbox"
-            self.current_corner_radius = 0.20
+            self.current_fit_mode = "fit"
+            self.current_corner_radius = 0.25
             self.current_margin = 0.08
-            self.current_center_gap = 0.05
+            self.current_center_gap = 0.06
+            self.current_content_scale = 1.0
         elif "4:3" in choice:
             self.current_template_id = "classic_optical_4_3"
             self.current_aspect_mode = "4:3"
             self.current_fit_mode = "crop"
             self.current_corner_radius = 0.35
-            self.current_margin = 0.05
+            self.current_margin = 0.04
             self.current_center_gap = 0.04
+            self.current_content_scale = 1.0
         elif "Half SBS" in choice:
             self.current_template_id = "half_sbs_fullscreen"
             self.current_aspect_mode = "fill"
-            self.current_fit_mode = "fill"
+            self.current_fit_mode = "crop"
             self.current_corner_radius = 0.0
             self.current_margin = 0.0
             self.current_center_gap = 0.0
+            self.current_content_scale = 1.0
         else:
             self.current_template_id = "custom"
 
@@ -486,10 +547,23 @@ class StreamingTab(ctk.CTkFrame):
         self.slider_corner.set(self.current_corner_radius)
         self.slider_margin.set(self.current_margin)
         self.slider_gap.set(self.current_center_gap)
+        self.slider_scale.set(self.current_content_scale)
+        self.opt_fit.set("Ajustar al Marco (100% Visible / Sin recortes)" if self.current_fit_mode == "fit" else "Rellenar Lente (Recorte inmersivo)")
+        pct = int(round(self.current_content_scale * 100))
+        self.lbl_scale_indicator.configure(text=f"{pct}% (Campo de Visión)")
 
         # Notificamos a la ventana de proyección si está abierta
         if self.active_projection_window and self.active_projection_window.winfo_exists():
             self.active_projection_window.apply_template(self.current_template_id)
+
+    def _on_fit_mode_selected(self, choice: str) -> None:
+        """
+        Ajusta el modo de encaje de la imagen entre ajuste completo o recorte inmersivo.
+        """
+        self.current_fit_mode = "crop" if "Rellenar" in choice else "fit"
+        self.current_template_id = "custom"
+        if self.active_projection_window and self.active_projection_window.winfo_exists():
+            self.active_projection_window.fit_mode = self.current_fit_mode
 
     def _on_slider_changed(self, _val: Any = None) -> None:
         """
@@ -499,6 +573,15 @@ class StreamingTab(ctk.CTkFrame):
         self.current_margin = self.slider_margin.get()
         self.current_center_gap = self.slider_gap.get()
         self.current_parallax = int(self.slider_parallax.get())
+        self.current_content_scale = round(self.slider_scale.get(), 2)
+        pct = int(round(self.current_content_scale * 100))
+        if pct == 100:
+            desc = "100% (Tamaño de Ventana Estándar)"
+        elif pct < 100:
+            desc = f"{pct}% (Pantalla Alejada / 100% Contenido Visible)"
+        else:
+            desc = f"{pct}% (Zoom / Acercamiento Inmersivo)"
+        self.lbl_scale_indicator.configure(text=desc)
         self.current_template_id = "custom"
 
         if self.active_projection_window and self.active_projection_window.winfo_exists():
@@ -506,6 +589,8 @@ class StreamingTab(ctk.CTkFrame):
             self.active_projection_window.margin_pct = self.current_margin
             self.active_projection_window.center_gap_pct = self.current_center_gap
             self.active_projection_window.parallax_px = self.current_parallax
+            self.active_projection_window.fit_mode = self.current_fit_mode
+            self.active_projection_window.set_zoom(self.current_content_scale)
 
     def _on_fps_changed(self, choice: str) -> None:
         """
@@ -545,6 +630,7 @@ class StreamingTab(ctk.CTkFrame):
             center_gap_pct=self.current_center_gap,
             parallax_px=self.current_parallax,
             target_fps=self.current_fps,
+            content_scale=self.current_content_scale,
             on_close_callback=self._on_projection_closed
         )
 
@@ -645,7 +731,8 @@ class StreamingTab(ctk.CTkFrame):
                         corner_radius_pct=self.current_corner_radius,
                         margin_pct=self.current_margin,
                         center_gap_pct=self.current_center_gap,
-                        parallax_px=self.current_parallax
+                        parallax_px=self.current_parallax,
+                        content_scale=self.current_content_scale
                     )
                     self.stream_server.update_frame(sbs_frame, quality=75)
             except Exception:

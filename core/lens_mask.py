@@ -26,6 +26,7 @@ class LensFormatTemplate:
     corner_radius_pct: float       # Radio de curvatura de esquinas (0.0 = rectas, 1.0 = circulares)
     margin_pct: float              # Margen perimetral negro (0.0 a 0.25)
     center_gap_pct: float          # Separación interpupilar negra central (0.0 a 0.15)
+    content_scale: float = 1.0     # Escala de campo de visión (FOV / Zoom): 0.5 a 1.5 (1.0 = 100%)
 
 
 class LensMaskGenerator:
@@ -37,6 +38,17 @@ class LensMaskGenerator:
 
     # Diccionario maestro de plantillas de formato predefinidas
     PRESET_TEMPLATES: Dict[str, LensFormatTemplate] = {
+        "virtual_cinema_full": LensFormatTemplate(
+            id="virtual_cinema_full",
+            name_key="tmpl_cinema_full_name",
+            desc_key="tmpl_cinema_full_desc",
+            aspect_mode="original",
+            fit_mode="fit",
+            corner_radius_pct=0.15,
+            margin_pct=0.04,
+            center_gap_pct=0.04,
+            content_scale=0.95
+        ),
         "vr_shinecon_1_1": LensFormatTemplate(
             id="vr_shinecon_1_1",
             name_key="tmpl_shinecon_1_1_name",
@@ -45,7 +57,8 @@ class LensMaskGenerator:
             fit_mode="crop",
             corner_radius_pct=0.45,
             margin_pct=0.04,
-            center_gap_pct=0.04
+            center_gap_pct=0.04,
+            content_scale=1.0
         ),
         "vr180_lens_mask": LensFormatTemplate(
             id="vr180_lens_mask",
@@ -55,7 +68,8 @@ class LensMaskGenerator:
             fit_mode="crop",
             corner_radius_pct=0.75,
             margin_pct=0.03,
-            center_gap_pct=0.05
+            center_gap_pct=0.05,
+            content_scale=1.0
         ),
         "virtual_cinema_16_9": LensFormatTemplate(
             id="virtual_cinema_16_9",
@@ -65,7 +79,8 @@ class LensMaskGenerator:
             fit_mode="fit",
             corner_radius_pct=0.25,
             margin_pct=0.08,
-            center_gap_pct=0.06
+            center_gap_pct=0.06,
+            content_scale=1.0
         ),
         "classic_optical_4_3": LensFormatTemplate(
             id="classic_optical_4_3",
@@ -75,7 +90,8 @@ class LensMaskGenerator:
             fit_mode="crop",
             corner_radius_pct=0.35,
             margin_pct=0.04,
-            center_gap_pct=0.04
+            center_gap_pct=0.04,
+            content_scale=1.0
         ),
         "half_sbs_fullscreen": LensFormatTemplate(
             id="half_sbs_fullscreen",
@@ -85,7 +101,8 @@ class LensMaskGenerator:
             fit_mode="crop",
             corner_radius_pct=0.0,
             margin_pct=0.0,
-            center_gap_pct=0.0
+            center_gap_pct=0.0,
+            content_scale=1.0
         ),
         "custom": LensFormatTemplate(
             id="custom",
@@ -95,7 +112,8 @@ class LensMaskGenerator:
             fit_mode="crop",
             corner_radius_pct=0.40,
             margin_pct=0.05,
-            center_gap_pct=0.04
+            center_gap_pct=0.04,
+            content_scale=1.0
         )
     }
 
@@ -199,22 +217,46 @@ class LensMaskGenerator:
         target_w: int,
         target_h: int,
         aspect_mode: str,
-        fit_mode: str
+        fit_mode: str,
+        content_scale: float = 1.0
     ) -> Image.Image:
         """
         Adapta el fotograma original a las proporciones deseadas (1:1, 4:3, 16:9, etc.)
-        evitando el estiramiento horizontal no deseado.
+        y escala de campo de visión (FOV), evitando el estiramiento o recorte indeseado.
         
         Args:
             frame (PIL.Image): Fotograma original.
             target_w (int): Ancho deseado de la ventana del ojo.
             target_h (int): Alto deseado de la ventana del ojo.
             aspect_mode (str): '1:1', '4:3', '16:9', 'original', 'fill'.
-            fit_mode (str): 'crop' (recortar bordes sobrantes) o 'fit' (añadir barras negras).
+            fit_mode (str): 'crop' (recortar bordes sobrantes) o 'fit' (100% visible / letterbox).
+            content_scale (float): Escala / Zoom del contenido (0.5 a 1.5, donde 1.0 es 100%).
             
         Returns:
             PIL.Image.Image: Fotograma transformado con dimensiones exactas (target_w, target_h).
         """
+        scale_val = max(0.5, min(content_scale, 1.5))
+
+        # Modo fill / estirar directamente a la ventana
+        if aspect_mode == "fill":
+            base_img = frame.resize((target_w, target_h), Image.Resampling.BILINEAR)
+            if abs(scale_val - 1.0) < 0.001:
+                return base_img
+            scaled_w = max(1, int(target_w * scale_val))
+            scaled_h = max(1, int(target_h * scale_val))
+            resized = base_img.resize((scaled_w, scaled_h), Image.Resampling.BILINEAR)
+            padded = Image.new("RGB", (target_w, target_h), (0, 0, 0))
+            offset_x = (target_w - scaled_w) // 2
+            offset_y = (target_h - scaled_h) // 2
+            if scale_val <= 1.0:
+                padded.paste(resized, (offset_x, offset_y))
+            else:
+                crop_x = (scaled_w - target_w) // 2
+                crop_y = (scaled_h - target_h) // 2
+                cropped = resized.crop((crop_x, crop_y, crop_x + target_w, crop_y + target_h))
+                padded.paste(cropped, (0, 0))
+            return padded
+
         # Determinamos la relación de aspecto numérica objetivo
         if aspect_mode == "1:1":
             target_ratio = 1.0
@@ -225,32 +267,62 @@ class LensMaskGenerator:
         elif aspect_mode == "original":
             target_ratio = frame.width / frame.height if frame.height > 0 else (16.0 / 9.0)
         else:
-            # Modo fill / estirar a la ventana
-            return frame.resize((target_w, target_h), Image.Resampling.BILINEAR)
+            target_ratio = 1.0
 
-        # Calculamos dimensiones del área de contenido según el ratio
         window_ratio = target_w / target_h if target_h > 0 else 1.0
 
         if fit_mode == "crop":
             # Recorte centrado (Center Crop) preservando el aspecto objetivo
             content_img = ImageOps.fit(frame, (target_w, target_h), centering=(0.5, 0.5))
-            return content_img
+            if abs(scale_val - 1.0) < 0.001:
+                return content_img
+
+            scaled_w = max(1, int(target_w * scale_val))
+            scaled_h = max(1, int(target_h * scale_val))
+            resized = content_img.resize((scaled_w, scaled_h), Image.Resampling.BILINEAR)
+            padded = Image.new("RGB", (target_w, target_h), (0, 0, 0))
+            offset_x = (target_w - scaled_w) // 2
+            offset_y = (target_h - scaled_h) // 2
+            if scale_val <= 1.0:
+                padded.paste(resized, (offset_x, offset_y))
+            else:
+                crop_x = (scaled_w - target_w) // 2
+                crop_y = (scaled_h - target_h) // 2
+                cropped = resized.crop((crop_x, crop_y, crop_x + target_w, crop_y + target_h))
+                padded.paste(cropped, (0, 0))
+            return padded
         else:
-            # Modo 'fit' con barras negras (Letterbox / Pillarbox)
+            # Modo 'fit' con barras negras (100% de la imagen visible, Letterbox / Pillarbox)
             if target_ratio >= window_ratio:
                 # Limitado por ancho
-                content_w = target_w
-                content_h = int(target_w / target_ratio)
+                base_w = target_w
+                base_h = int(target_w / target_ratio)
             else:
                 # Limitado por alto
-                content_h = target_h
-                content_w = int(target_h * target_ratio)
+                base_h = target_h
+                base_w = int(target_h * target_ratio)
 
-            resized = frame.resize((max(1, content_w), max(1, content_h)), Image.Resampling.BILINEAR)
+            scaled_w = max(1, int(base_w * scale_val))
+            scaled_h = max(1, int(base_h * scale_val))
+
+            resized = frame.resize((scaled_w, scaled_h), Image.Resampling.BILINEAR)
             padded = Image.new("RGB", (target_w, target_h), (0, 0, 0))
-            offset_x = (target_w - content_w) // 2
-            offset_y = (target_h - content_h) // 2
-            padded.paste(resized, (offset_x, offset_y))
+            offset_x = (target_w - scaled_w) // 2
+            offset_y = (target_h - scaled_h) // 2
+
+            if scaled_w <= target_w and scaled_h <= target_h:
+                padded.paste(resized, (offset_x, offset_y))
+            else:
+                # Si scale_val > 1.0 y excede el marco del ojo, recortamos suavemente el desbordamiento
+                crop_x1 = max(0, -offset_x)
+                crop_y1 = max(0, -offset_y)
+                crop_x2 = crop_x1 + min(scaled_w, target_w)
+                crop_y2 = crop_y1 + min(scaled_h, target_h)
+                cropped = resized.crop((crop_x1, crop_y1, crop_x2, crop_y2))
+                paste_x = max(0, offset_x)
+                paste_y = max(0, offset_y)
+                padded.paste(cropped, (paste_x, paste_y))
+
             return padded
 
     @classmethod
@@ -264,7 +336,8 @@ class LensMaskGenerator:
         corner_radius_pct: float = 0.45,
         margin_pct: float = 0.04,
         center_gap_pct: float = 0.04,
-        parallax_px: int = 0
+        parallax_px: int = 0,
+        content_scale: float = 1.0
     ) -> Image.Image:
         """
         Compone la imagen final Side-by-Side estereoscópica completa para la vista previa
@@ -280,6 +353,7 @@ class LensMaskGenerator:
             margin_pct (float): Margen exterior negro.
             center_gap_pct (float): Espaciador central.
             parallax_px (int): Píxeles de desplazamiento estereoscópico 3D.
+            content_scale (float): Escala / Zoom del contenido (0.5 a 1.5).
             
         Returns:
             PIL.Image.Image: Imagen final SBS lista para mostrar o guardar.
@@ -292,8 +366,10 @@ class LensMaskGenerator:
             target_canvas_w, target_canvas_h, margin_pct, center_gap_pct
         )
 
-        # Ajustamos el fotograma fuente al tamaño de la ventana
-        fitted_frame = cls.fit_source_frame(source_frame, eye_w, eye_h, aspect_mode, fit_mode)
+        # Ajustamos el fotograma fuente al tamaño de la ventana y escala de FOV
+        fitted_frame = cls.fit_source_frame(
+            source_frame, eye_w, eye_h, aspect_mode, fit_mode, content_scale=content_scale
+        )
 
         # Simulación de disparidad 3D Parallax si es mayor a 0
         if parallax_px > 0:

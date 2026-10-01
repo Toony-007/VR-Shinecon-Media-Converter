@@ -100,6 +100,8 @@ class LocalizationManager:
 
             # Plantillas y Control de Bordes / Esquinas
             "label_template": "Plantilla de Formato Óptico:",
+            "tmpl_cinema_full_name": "Cine Virtual Completo (100% Contenido / Sin Recorte)",
+            "tmpl_cinema_full_desc": "Muestra el 100% del video o pantalla sin recortar bordes. Pantalla de cine flotante con bordes redondeados y escala ajustable.",
             "tmpl_shinecon_1_1_name": "VR Shinecon Óptico (Cuadrado 1:1)",
             "tmpl_shinecon_1_1_desc": "Ajuste cuadrado 1:1 centrado con esquinas redondeadas. Elimina el estiramiento horizontal y se adapta a las lentes de VR Shinecon.",
             "tmpl_vr180_name": "Máscara de Visor VR180 / Barril Ocular",
@@ -121,8 +123,11 @@ class LocalizationManager:
             "opt_aspect_fill": "Estirar a Ventana",
 
             "label_fit_mode": "Modo de Ajuste en Ventana:",
-            "opt_fit_crop": "Rellenar ventana (Recorte centrado sin deformar)",
-            "opt_fit_letterbox": "Ajustar entero (Barras negras / Letterbox)",
+            "opt_fit_crop": "Rellenar Lente (Recorte inmersivo)",
+            "opt_fit_letterbox": "Ajustar al Marco (100% Visible / Sin recortes)",
+
+            "label_content_scale": "Tamaño de Pantalla / Escala (FOV):",
+            "scale_indicator": "{val}% (Campo de Visión)",
 
             "label_corner_radius": "Curvatura de Esquinas (Radio Lente):",
             "label_margin": "Margen / Borde Negro Exterior:",
@@ -134,8 +139,11 @@ class LocalizationManager:
             "stream_source_window": "Ventana de Aplicación (Navegador, VLC, etc.)",
             "stream_btn_refresh_windows": "🔄 Actualizar Ventanas",
             "stream_optical_title": "Calibración Óptica y Plantilla SBS",
+            "stream_scale_label": "Escala / FOV:",
+            "stream_fit_label": "Modo de Ajuste:",
             "stream_fps_label": "Tasa de Cuadros (FPS):",
             "stream_btn_start_projection": "🚀 Iniciar Proyección en Pantalla Completa (F11)",
+            "stream_zoom_hint": "💡 Atajos en Pantalla Completa: Rueda del Ratón o teclas + / - para Zoom, 0 para restablecer.",
             "stream_web_title": "Servidor Web para Celular (Sin Cables ni Apps)",
             "stream_web_switch": "Transmitir por Wi-Fi al Celular",
             "stream_web_url_label": "Abre este enlace en el navegador del celular:",
@@ -279,6 +287,8 @@ class LocalizationManager:
 
             # Templates & Rounded Corners / Border Control
             "label_template": "Optical Format Template:",
+            "tmpl_cinema_full_name": "Full Virtual Cinema (100% Content / No Crop)",
+            "tmpl_cinema_full_desc": "Displays 100% of the video or screen without edge clipping. Floating cinema screen with rounded corners and adjustable FOV scale.",
             "tmpl_shinecon_1_1_name": "VR Shinecon Optical (Square 1:1)",
             "tmpl_shinecon_1_1_desc": "Centered 1:1 square fit with rounded corners. Eliminates horizontal stretching and fits VR Shinecon lenses.",
             "tmpl_vr180_name": "VR180 Headset Mask / Eyepiece Barrel",
@@ -300,8 +310,11 @@ class LocalizationManager:
             "opt_aspect_fill": "Stretch to Window",
 
             "label_fit_mode": "Window Fit Mode:",
-            "opt_fit_crop": "Fill window (Center crop without distortion)",
-            "opt_fit_letterbox": "Fit whole frame (Black bars / Letterbox)",
+            "opt_fit_crop": "Fill Lens (Immersive crop)",
+            "opt_fit_letterbox": "Fit to Frame (100% Visible / No crop)",
+
+            "label_content_scale": "Screen Size / FOV Scale:",
+            "scale_indicator": "{val}% (Field of View)",
 
             "label_corner_radius": "Corner Rounding (Lens Radius):",
             "label_margin": "Outer Black Margin / Border:",
@@ -313,8 +326,11 @@ class LocalizationManager:
             "stream_source_window": "Application Window (Browser, VLC, etc.)",
             "stream_btn_refresh_windows": "🔄 Refresh Windows",
             "stream_optical_title": "Optical Calibration & SBS Template",
+            "stream_scale_label": "Scale / FOV:",
+            "stream_fit_label": "Fit Mode:",
             "stream_fps_label": "Frame Rate (FPS):",
             "stream_btn_start_projection": "🚀 Start Fullscreen Projection (F11)",
+            "stream_zoom_hint": "💡 Fullscreen Shortcuts: Mouse Wheel or + / - keys to Zoom, 0 to reset.",
             "stream_web_title": "Mobile Web Server (No Cables or Apps)",
             "stream_web_switch": "Broadcast over Wi-Fi to Mobile",
             "stream_web_url_label": "Open this link in your phone's browser:",

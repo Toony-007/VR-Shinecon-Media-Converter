@@ -43,6 +43,7 @@ class StreamingWindow(ctk.CTkToplevel):
         center_gap_pct: float = 0.04,
         parallax_px: int = 0,
         target_fps: int = 60,
+        content_scale: float = 1.0,
         on_close_callback: Optional[Callable[[], None]] = None
     ) -> None:
         """
@@ -62,6 +63,7 @@ class StreamingWindow(ctk.CTkToplevel):
         self.center_gap_pct = center_gap_pct
         self.parallax_px = parallax_px
         self.target_fps = target_fps
+        self.content_scale = content_scale  # Escala de campo de visión FOV (0.5 a 1.5)
         self.on_close_callback = on_close_callback
 
         # Configuración de ventana base
@@ -100,6 +102,18 @@ class StreamingWindow(ctk.CTkToplevel):
         self.lbl_canvas.bind("<Button-1>", lambda e: self.focus_set())
         self.bind("<Motion>", self._on_mouse_move)
         self.lbl_canvas.bind("<Motion>", self._on_mouse_move)
+
+        # Atajos de Zoom y Escala FOV en Pantalla Completa
+        self.bind("<plus>", lambda e: self.adjust_zoom(0.05))
+        self.bind("<KP_Add>", lambda e: self.adjust_zoom(0.05))
+        self.bind("<equal>", lambda e: self.adjust_zoom(0.05))
+        self.bind("<minus>", lambda e: self.adjust_zoom(-0.05))
+        self.bind("<KP_Subtract>", lambda e: self.adjust_zoom(-0.05))
+        self.bind("<underscore>", lambda e: self.adjust_zoom(-0.05))
+        self.bind("<0>", lambda e: self.set_zoom(1.0))
+        self.bind("<r>", lambda e: self.set_zoom(1.0))
+        self.bind("<MouseWheel>", self._on_mouse_wheel)
+        self.lbl_canvas.bind("<MouseWheel>", self._on_mouse_wheel)
 
         # Enlace tardío a subwidgets de Tkinter para capturar doble clic y foco
         self.after(100, self._bind_internal_canvas_events)
@@ -171,19 +185,53 @@ class StreamingWindow(ctk.CTkToplevel):
         self.opt_hud_template = ctk.CTkOptionMenu(
             self.hud_frame,
             values=[
+                "Cine Completo (100% Contenido)",
                 "VR Shinecon (1:1)",
                 "VR180 Máscara",
                 "Cine 16:9",
                 "Formato 4:3",
                 "Pantalla Completa"
             ],
-            width=135,
+            width=155,
             height=28,
             font=ctk.CTkFont(size=11),
             command=self._on_hud_template_changed
         )
-        self.opt_hud_template.set("VR Shinecon (1:1)")
-        self.opt_hud_template.pack(side="left", padx=6)
+        self.opt_hud_template.set("Cine Completo (100% Contenido)" if self.template_id == "virtual_cinema_full" else "VR Shinecon (1:1)")
+        self.opt_hud_template.pack(side="left", padx=4)
+
+        # Controles rápidos de Zoom / FOV
+        self.btn_zoom_out = ctk.CTkButton(
+            self.hud_frame,
+            text="➖",
+            width=28,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#334155",
+            hover_color="#475569",
+            command=lambda: self.adjust_zoom(-0.05)
+        )
+        self.btn_zoom_out.pack(side="left", padx=(4, 2))
+
+        self.lbl_hud_zoom = ctk.CTkLabel(
+            self.hud_frame,
+            text=f"🔍 {int(round(self.content_scale * 100))}%",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#38bdf8"
+        )
+        self.lbl_hud_zoom.pack(side="left", padx=2)
+
+        self.btn_zoom_in = ctk.CTkButton(
+            self.hud_frame,
+            text="➕",
+            width=28,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#334155",
+            hover_color="#475569",
+            command=lambda: self.adjust_zoom(0.05)
+        )
+        self.btn_zoom_in.pack(side="left", padx=(2, 6))
 
         # Botón Pantalla Completa
         self.btn_fullscreen = ctk.CTkButton(
@@ -194,7 +242,7 @@ class StreamingWindow(ctk.CTkToplevel):
             font=ctk.CTkFont(size=11, weight="bold"),
             command=self.toggle_fullscreen
         )
-        self.btn_fullscreen.pack(side="left", padx=6)
+        self.btn_fullscreen.pack(side="left", padx=4)
 
         # Botón Salir / Cerrar
         self.btn_close = ctk.CTkButton(
@@ -209,31 +257,81 @@ class StreamingWindow(ctk.CTkToplevel):
         )
         self.btn_close.pack(side="left", padx=(4, 15))
 
+    def _on_mouse_wheel(self, event: Any) -> None:
+        """
+        Ajusta el zoom / escala de campo de visión usando la rueda del ratón.
+        """
+        delta = getattr(event, "delta", 0)
+        if delta > 0:
+            self.adjust_zoom(0.05)
+        elif delta < 0:
+            self.adjust_zoom(-0.05)
+
+    def adjust_zoom(self, delta: float) -> None:
+        """
+        Aumenta o disminuye la escala de campo de visión en vivo.
+        """
+        new_scale = max(0.50, min(1.50, round(self.content_scale + delta, 2)))
+        self.set_zoom(new_scale)
+
+    def set_zoom(self, scale: float) -> None:
+        """
+        Establece la escala de zoom y actualiza el indicador en el HUD flotante.
+        """
+        self.content_scale = max(0.50, min(1.50, round(scale, 2)))
+        pct = int(round(self.content_scale * 100))
+        if hasattr(self, "lbl_hud_zoom"):
+            self.lbl_hud_zoom.configure(text=f"🔍 {pct}%")
+        self._show_hud()
+        self._schedule_hud_hide()
+
     def _on_hud_template_changed(self, choice: str) -> None:
         """
         Cambia la plantilla óptica sobre la marcha sin pausar la transmisión.
         """
-        if "VR180" in choice:
+        if "Completo" in choice or "100%" in choice:
+            self.aspect_mode = "original"
+            self.fit_mode = "fit"
+            self.corner_radius_pct = 0.15
+            self.margin_pct = 0.04
+            self.center_gap_pct = 0.04
+            self.set_zoom(0.95)
+        elif "VR180" in choice:
             self.aspect_mode = "1:1"
+            self.fit_mode = "crop"
             self.corner_radius_pct = 0.75
             self.margin_pct = 0.03
+            self.center_gap_pct = 0.05
+            self.set_zoom(1.0)
         elif "Cine" in choice:
             self.aspect_mode = "16:9"
+            self.fit_mode = "fit"
             self.corner_radius_pct = 0.25
             self.margin_pct = 0.08
+            self.center_gap_pct = 0.06
+            self.set_zoom(1.0)
         elif "4:3" in choice:
             self.aspect_mode = "4:3"
+            self.fit_mode = "crop"
             self.corner_radius_pct = 0.35
             self.margin_pct = 0.04
-        elif "Completa" in choice:
+            self.center_gap_pct = 0.04
+            self.set_zoom(1.0)
+        elif "Pantalla Completa" in choice:
             self.aspect_mode = "fill"
+            self.fit_mode = "crop"
             self.corner_radius_pct = 0.0
             self.margin_pct = 0.0
+            self.center_gap_pct = 0.0
+            self.set_zoom(1.0)
         else:
             # VR Shinecon 1:1 por defecto
             self.aspect_mode = "1:1"
+            self.fit_mode = "crop"
             self.corner_radius_pct = 0.45
             self.margin_pct = 0.04
+            self.center_gap_pct = 0.04
+            self.set_zoom(1.0)
 
     def toggle_fullscreen(self) -> None:
         """
@@ -380,6 +478,33 @@ class StreamingWindow(ctk.CTkToplevel):
             self.after_cancel(self._hud_hide_timer)
         self._hud_hide_timer = self.after(2500, self._hide_hud)
 
+    def apply_template(self, template_id: str) -> None:
+        """
+        Aplica los parámetros de una plantilla a la proyección en vivo.
+        """
+        if template_id in LensMaskGenerator.PRESET_TEMPLATES:
+            tmpl = LensMaskGenerator.PRESET_TEMPLATES[template_id]
+            self.template_id = tmpl.id
+            self.aspect_mode = tmpl.aspect_mode
+            self.fit_mode = tmpl.fit_mode
+            self.corner_radius_pct = tmpl.corner_radius_pct
+            self.margin_pct = tmpl.margin_pct
+            self.center_gap_pct = tmpl.center_gap_pct
+            self.set_zoom(tmpl.content_scale)
+            if hasattr(self, "opt_hud_template"):
+                if template_id == "virtual_cinema_full":
+                    self.opt_hud_template.set("Cine Completo (100% Contenido)")
+                elif template_id == "vr180_lens_mask":
+                    self.opt_hud_template.set("VR180 Máscara")
+                elif template_id == "virtual_cinema_16_9":
+                    self.opt_hud_template.set("Cine 16:9")
+                elif template_id == "classic_optical_4_3":
+                    self.opt_hud_template.set("Formato 4:3")
+                elif template_id == "half_sbs_fullscreen":
+                    self.opt_hud_template.set("Pantalla Completa")
+                else:
+                    self.opt_hud_template.set("VR Shinecon (1:1)")
+
     def _capture_and_stream_loop(self) -> None:
         """
         Bucle de captura a alta velocidad, composición de máscara óptica y emisión.
@@ -397,7 +522,7 @@ class StreamingWindow(ctk.CTkToplevel):
                     raw_frame = self.capture_engine.capture_monitor(self.source_id)
 
                 if raw_frame is not None and self._is_running:
-                    # 2. Composición estereoscópica SBS con esquinas redondeadas
+                    # 2. Composición estereoscópica SBS con esquinas redondeadas y escala FOV
                     target_w = 1280
                     target_h = 720
 
@@ -410,7 +535,8 @@ class StreamingWindow(ctk.CTkToplevel):
                         corner_radius_pct=self.corner_radius_pct,
                         margin_pct=self.margin_pct,
                         center_gap_pct=self.center_gap_pct,
-                        parallax_px=self.parallax_px
+                        parallax_px=self.parallax_px,
+                        content_scale=self.content_scale
                     )
 
                     # 3. Transmisión al servidor web móvil si está activo

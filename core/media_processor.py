@@ -63,6 +63,7 @@ class ConversionOptions:
     corner_radius_pct: float = 0.45 # Radio de curvatura de esquinas (0.0 a 1.0)
     margin_pct: float = 0.04       # Margen negro perimetral (0.0 a 0.25)
     center_gap_pct: float = 0.04   # Separación central interpupilar (0.0 a 0.15)
+    content_scale: float = 1.0     # Escala de campo de visión (FOV / Zoom): 0.5 a 1.5 (1.0 = 100%)
     sbs_mode: str = "half"         # Formato SBS: 'half' (anamórfico 1080p) o 'full' (doble ancho)
     resolution: str = "1080p"      # Resolución objetivo: 'original', '720p', '1080p', '1440p', '4k'
     container: str = "mp4"         # Extensión del contenedor: 'mp4' o 'mkv'
@@ -418,21 +419,25 @@ class MediaProcessor:
         Returns:
             Tuple[str, Optional[str]]: (filter_complex_str, ruta_mascara_png_temporal_o_None).
         """
+        tmpl_id = options.template_id if options.template_id in LensMaskGenerator.PRESET_TEMPLATES else "vr_shinecon_1_1"
+        tmpl = LensMaskGenerator.PRESET_TEMPLATES[tmpl_id]
+
         if options.mode == "auto":
-            tmpl = LensMaskGenerator.PRESET_TEMPLATES["vr_shinecon_1_1"]
-            aspect_mode = tmpl.aspect_mode
-            fit_mode = tmpl.fit_mode
+            aspect_mode = options.aspect_mode if options.aspect_mode else tmpl.aspect_mode
+            fit_mode = options.fit_mode if options.fit_mode else tmpl.fit_mode
             corner_r = tmpl.corner_radius_pct
             margin_pct = tmpl.margin_pct
             gap_pct = tmpl.center_gap_pct
-            parallax = 0
-            sbs_mode = "half"
+            content_scale = options.content_scale if hasattr(options, "content_scale") and options.content_scale != 1.0 else tmpl.content_scale
+            parallax = options.parallax_depth
+            sbs_mode = options.sbs_mode
         else:
             aspect_mode = options.aspect_mode
             fit_mode = options.fit_mode
             corner_r = options.corner_radius_pct
             margin_pct = options.margin_pct
             gap_pct = options.center_gap_pct
+            content_scale = getattr(options, "content_scale", 1.0)
             parallax = options.parallax_depth
             sbs_mode = options.sbs_mode
 
@@ -453,17 +458,51 @@ class MediaProcessor:
         pad_y = y_l
         pad_x_right = x_r - half_w
 
-        # Filtro de transformación de aspecto para la ventana del ojo
-        if aspect_mode == "1:1" and fit_mode == "crop":
-            fit_filter = f"crop=min(iw\\,ih):min(iw\\,ih),scale={eye_w}:{eye_h}:flags=lanczos"
+        # Escala de campo de visión (FOV / Zoom)
+        scale_val = max(0.5, min(content_scale, 1.5))
+        scaled_w = int(eye_w * scale_val)
+        scaled_w = max(2, scaled_w - (scaled_w % 2))
+        scaled_h = int(eye_h * scale_val)
+        scaled_h = max(2, scaled_h - (scaled_h % 2))
+
+        # Filtro de transformación de aspecto y escala para la ventana del ojo
+        if fit_mode == "fit":
+            # 100% de la imagen visible, sin recortes (Letterbox / Pillarbox)
+            if scale_val <= 1.0:
+                fit_filter = (
+                    f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=decrease,"
+                    f"pad={eye_w}:{eye_h}:(ow-iw)/2:(oh-ih)/2:black"
+                )
+            else:
+                fit_filter = (
+                    f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=decrease,"
+                    f"crop={eye_w}:{eye_h}:(iw-ow)/2:(ih-oh)/2,"
+                    f"pad={eye_w}:{eye_h}:(ow-iw)/2:(oh-ih)/2:black"
+                )
+        elif aspect_mode == "1:1" and fit_mode == "crop":
+            crop_base = "crop=min(iw\\,ih):min(iw\\,ih)"
+            if scale_val <= 1.0:
+                fit_filter = f"{crop_base},scale={scaled_w}:{scaled_h}:flags=lanczos,pad={eye_w}:{eye_h}:(ow-iw)/2:(oh-ih)/2:black"
+            else:
+                fit_filter = f"{crop_base},scale={scaled_w}:{scaled_h}:flags=lanczos,crop={eye_w}:{eye_h}:(iw-ow)/2:(ih-oh)/2"
         elif aspect_mode == "4:3" and fit_mode == "crop":
-            fit_filter = f"crop=if(gt(iw/ih\\,4/3)\\,ih*4/3\\,iw):if(gt(iw/ih\\,4/3)\\,ih\\,iw*3/4),scale={eye_w}:{eye_h}:flags=lanczos"
+            crop_base = "crop=if(gt(iw/ih\\,4/3)\\,ih*4/3\\,iw):if(gt(iw/ih\\,4/3)\\,ih\\,iw*3/4)"
+            if scale_val <= 1.0:
+                fit_filter = f"{crop_base},scale={scaled_w}:{scaled_h}:flags=lanczos,pad={eye_w}:{eye_h}:(ow-iw)/2:(oh-ih)/2:black"
+            else:
+                fit_filter = f"{crop_base},scale={scaled_w}:{scaled_h}:flags=lanczos,crop={eye_w}:{eye_h}:(iw-ow)/2:(ih-oh)/2"
         elif aspect_mode == "16:9" and fit_mode == "crop":
-            fit_filter = f"crop=if(gt(iw/ih\\,16/9)\\,ih*16/9\\,iw):if(gt(iw/ih\\,16/9)\\,ih\\,iw*9/16),scale={eye_w}:{eye_h}:flags=lanczos"
-        elif fit_mode == "fit":
-            fit_filter = f"scale={eye_w}:{eye_h}:force_original_aspect_ratio=decrease,pad={eye_w}:{eye_h}:(ow-iw)/2:(oh-ih)/2:black"
+            crop_base = "crop=if(gt(iw/ih\\,16/9)\\,ih*16/9\\,iw):if(gt(iw/ih\\,16/9)\\,ih\\,iw*9/16)"
+            if scale_val <= 1.0:
+                fit_filter = f"{crop_base},scale={scaled_w}:{scaled_h}:flags=lanczos,pad={eye_w}:{eye_h}:(ow-iw)/2:(oh-ih)/2:black"
+            else:
+                fit_filter = f"{crop_base},scale={scaled_w}:{scaled_h}:flags=lanczos,crop={eye_w}:{eye_h}:(iw-ow)/2:(ih-oh)/2"
         else:
-            fit_filter = f"scale={eye_w}:{eye_h}:flags=lanczos"
+            # Modo fill
+            if scale_val <= 1.0:
+                fit_filter = f"scale={scaled_w}:{scaled_h}:flags=lanczos,pad={eye_w}:{eye_h}:(ow-iw)/2:(oh-ih)/2:black"
+            else:
+                fit_filter = f"scale={scaled_w}:{scaled_h}:flags=lanczos,crop={eye_w}:{eye_h}:(iw-ow)/2:(ih-oh)/2"
 
         # Aplicación de simulación de profundidad 3D Parallax si es mayor a 0
         if parallax > 0:
