@@ -74,6 +74,9 @@ class StreamingTab(ctk.CTkFrame):
         self.current_parallax: int = 0
         self.current_content_scale: float = 0.95
         self.current_fps: int = 60
+        self.current_stream_w: int = 1920
+        self.current_stream_h: int = 1080
+        self.current_stream_quality: int = 85
 
         # Suscripción a cambios de idioma
         self.loc_mgr.add_listener(self._update_ui_texts)
@@ -160,7 +163,7 @@ class StreamingTab(ctk.CTkFrame):
 
         # Selector de Tasa de Refresco (FPS)
         frame_fps = ctk.CTkFrame(self.card_source, fg_color="transparent")
-        frame_fps.grid(row=4, column=0, sticky="ew", padx=15, pady=(15, 15))
+        frame_fps.grid(row=4, column=0, sticky="ew", padx=15, pady=(10, 6))
         frame_fps.grid_columnconfigure(1, weight=1)
 
         self.lbl_fps = ctk.CTkLabel(
@@ -177,6 +180,32 @@ class StreamingTab(ctk.CTkFrame):
         )
         self.seg_fps.set("60 FPS")
         self.seg_fps.grid(row=0, column=1, sticky="ew")
+
+        # Selector de Calidad y Rendimiento (1080p Ultra vs 720p Fluido)
+        frame_profile = ctk.CTkFrame(self.card_source, fg_color="transparent")
+        frame_profile.grid(row=5, column=0, sticky="ew", padx=15, pady=(4, 15))
+        frame_profile.grid_columnconfigure(1, weight=1)
+
+        self.lbl_profile = ctk.CTkLabel(
+            frame_profile,
+            text="Calidad:",
+            font=ctk.CTkFont(size=12)
+        )
+        self.lbl_profile.grid(row=0, column=0, sticky="w", padx=(0, 10))
+
+        self.stream_profiles = [
+            "🌟 1080p Ultra (60 FPS / Máxima Nitidez)",
+            "⚖️ 1080p Equilibrado (30 FPS / Alta Calidad)",
+            "⚡ 720p HD Fluido (60 FPS / Baja Latencia Wi-Fi)",
+            "📱 720p Red Básica (30 FPS / Menor Consumo)"
+        ]
+        self.opt_profile = ctk.CTkOptionMenu(
+            frame_profile,
+            values=self.stream_profiles,
+            command=self._on_profile_changed
+        )
+        self.opt_profile.set(self.stream_profiles[0])
+        self.opt_profile.grid(row=0, column=1, sticky="ew")
 
         # ----------------------------------------------------------------------
         # TARJETA 2: Calibración Óptica y Formato SBS (Derecha)
@@ -592,6 +621,41 @@ class StreamingTab(ctk.CTkFrame):
             self.active_projection_window.fit_mode = self.current_fit_mode
             self.active_projection_window.set_zoom(self.current_content_scale)
 
+    def _on_profile_changed(self, choice: str) -> None:
+        """
+        Ajusta la resolución nativa, tasa de cuadros y compresión según el perfil seleccionado.
+        """
+        if "1080p Ultra" in choice or "Máxima" in choice:
+            self.current_stream_w = 1920
+            self.current_stream_h = 1080
+            self.current_fps = 60
+            self.current_stream_quality = 85
+            self.seg_fps.set("60 FPS")
+        elif "1080p Equilibrado" in choice:
+            self.current_stream_w = 1920
+            self.current_stream_h = 1080
+            self.current_fps = 30
+            self.current_stream_quality = 75
+            self.seg_fps.set("30 FPS")
+        elif "720p HD Fluido" in choice or "Baja Latencia" in choice:
+            self.current_stream_w = 1280
+            self.current_stream_h = 720
+            self.current_fps = 60
+            self.current_stream_quality = 75
+            self.seg_fps.set("60 FPS")
+        else:
+            self.current_stream_w = 1280
+            self.current_stream_h = 720
+            self.current_fps = 30
+            self.current_stream_quality = 65
+            self.seg_fps.set("30 FPS")
+
+        if self.active_projection_window and self.active_projection_window.winfo_exists():
+            self.active_projection_window.target_fps = self.current_fps
+            self.active_projection_window.target_width = self.current_stream_w
+            self.active_projection_window.target_height = self.current_stream_h
+            self.active_projection_window.stream_quality = self.current_stream_quality
+
     def _on_fps_changed(self, choice: str) -> None:
         """
         Ajusta la tasa de fotogramas por segundo deseada.
@@ -615,7 +679,7 @@ class StreamingTab(ctk.CTkFrame):
 
         source_type, source_id = self._get_current_source_info()
 
-        # Instanciamos la ventana de proyección
+        # Instanciamos la ventana de proyección con resolución nativa de alta fidelidad
         self.active_projection_window = StreamingWindow(
             parent=self.winfo_toplevel(),
             capture_engine=self.capture_engine,
@@ -631,6 +695,9 @@ class StreamingTab(ctk.CTkFrame):
             parallax_px=self.current_parallax,
             target_fps=self.current_fps,
             content_scale=self.current_content_scale,
+            target_width=self.current_stream_w,
+            target_height=self.current_stream_h,
+            stream_quality=self.current_stream_quality,
             on_close_callback=self._on_projection_closed
         )
 
@@ -721,11 +788,11 @@ class StreamingTab(ctk.CTkFrame):
                 source_type, source_id = self._get_current_source_info()
                 frame = self.capture_engine.capture(source_type, source_id)
                 if frame is not None:
-                    # Componemos SBS óptico optimizado para móvil (resolución estándar 1920x1080)
+                    # Componemos SBS óptico optimizado para móvil según resolución configurada
                     sbs_frame = LensMaskGenerator.compose_preview_sbs(
                         source_frame=frame,
-                        target_canvas_w=1920,
-                        target_canvas_h=1080,
+                        target_canvas_w=self.current_stream_w,
+                        target_canvas_h=self.current_stream_h,
                         aspect_mode=self.current_aspect_mode,
                         fit_mode=self.current_fit_mode,
                         corner_radius_pct=self.current_corner_radius,
@@ -734,7 +801,7 @@ class StreamingTab(ctk.CTkFrame):
                         parallax_px=self.current_parallax,
                         content_scale=self.current_content_scale
                     )
-                    self.stream_server.update_frame(sbs_frame, quality=75)
+                    self.stream_server.update_frame(sbs_frame, quality=self.current_stream_quality)
             except Exception:
                 pass
 
@@ -774,6 +841,7 @@ class StreamingTab(ctk.CTkFrame):
             self.lbl_source_title.configure(text=f"📺 {self.loc_mgr.t('stream_source_title')}")
             self.btn_refresh_windows.configure(text=self.loc_mgr.t("stream_btn_refresh_windows"))
             self.lbl_fps.configure(text=self.loc_mgr.t("stream_fps_label"))
+            self.lbl_profile.configure(text=self.loc_mgr.t("stream_profile_label"))
             self.lbl_optical_title.configure(text=f"🥽 {self.loc_mgr.t('stream_optical_title')}")
             self.btn_launch_projection.configure(text=self.loc_mgr.t("stream_btn_start_projection"))
             self.lbl_web_title.configure(text=f"📡 {self.loc_mgr.t('stream_web_title')}")

@@ -13,8 +13,9 @@ import ctypes
 from ctypes import wintypes
 import threading
 from typing import Optional, Callable, Any
+import tkinter as tk
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageTk
 
 from core.lens_mask import LensMaskGenerator
 from core.screen_capture import ScreenCaptureEngine
@@ -25,7 +26,7 @@ class StreamingWindow(ctk.CTkToplevel):
     """
     Ventana de visualización y proyección en vivo en formato Side-by-Side (SBS).
     Permite arrastrarse a un segundo monitor, proyectarse en pantalla completa sin bordes
-    o retransmitirse al visor VR en el celular.
+    o retransmitirse al visor VR en el celular con latencia cero y 60 FPS estables.
     """
 
     def __init__(
@@ -44,6 +45,9 @@ class StreamingWindow(ctk.CTkToplevel):
         parallax_px: int = 0,
         target_fps: int = 60,
         content_scale: float = 1.0,
+        target_width: int = 1920,
+        target_height: int = 1080,
+        stream_quality: int = 80,
         on_close_callback: Optional[Callable[[], None]] = None
     ) -> None:
         """
@@ -64,6 +68,9 @@ class StreamingWindow(ctk.CTkToplevel):
         self.parallax_px = parallax_px
         self.target_fps = target_fps
         self.content_scale = content_scale  # Escala de campo de visión FOV (0.5 a 1.5)
+        self.target_width = target_width    # Resolución SBS nativa (1920x1080 o 1280x720)
+        self.target_height = target_height
+        self.stream_quality = stream_quality
         self.on_close_callback = on_close_callback
 
         # Configuración de ventana base
@@ -77,6 +84,11 @@ class StreamingWindow(ctk.CTkToplevel):
         self.is_paused: bool = False
         self._is_running: bool = True
 
+        # Pipeline de renderizado ultrarrápido con latencia cero (Zero Lag)
+        self._latest_display_frame: Optional[Image.Image] = None
+        self._display_update_pending: bool = False
+        self._current_photo: Optional[ImageTk.PhotoImage] = None
+
         # Métricas de rendimiento en vivo
         self.fps_counter: int = 0
         self.current_fps: float = 0.0
@@ -86,9 +98,10 @@ class StreamingWindow(ctk.CTkToplevel):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        # Lienzo principal para mostrar la transmisión
-        self.lbl_canvas = ctk.CTkLabel(self, text="", fg_color="#000000")
-        self.lbl_canvas.grid(row=0, column=0, sticky="nsew")
+        # Lienzo nativo Tkinter de ultra alta velocidad (60+ FPS directos sin sobrecarga)
+        self.canvas = tk.Canvas(self, bg="#000000", highlightthickness=0, bd=0)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self._canvas_img_id = self.canvas.create_image(0, 0, anchor="nw")
 
         # Controles flotantes HUD (Heads-Up Display)
         self._build_floating_hud()
@@ -98,10 +111,10 @@ class StreamingWindow(ctk.CTkToplevel):
         self.bind("<Escape>", lambda e: self._on_escape())
         self.bind("<space>", lambda e: self.toggle_pause())
         self.bind("<Double-Button-1>", lambda e: self.toggle_fullscreen())
-        self.lbl_canvas.bind("<Double-Button-1>", lambda e: self.toggle_fullscreen())
-        self.lbl_canvas.bind("<Button-1>", lambda e: self.focus_set())
+        self.canvas.bind("<Double-Button-1>", lambda e: self.toggle_fullscreen())
+        self.canvas.bind("<Button-1>", lambda e: self.focus_set())
         self.bind("<Motion>", self._on_mouse_move)
-        self.lbl_canvas.bind("<Motion>", self._on_mouse_move)
+        self.canvas.bind("<Motion>", self._on_mouse_move)
 
         # Atajos de Zoom y Escala FOV en Pantalla Completa
         self.bind("<plus>", lambda e: self.adjust_zoom(0.05))
@@ -113,10 +126,8 @@ class StreamingWindow(ctk.CTkToplevel):
         self.bind("<0>", lambda e: self.set_zoom(1.0))
         self.bind("<r>", lambda e: self.set_zoom(1.0))
         self.bind("<MouseWheel>", self._on_mouse_wheel)
-        self.lbl_canvas.bind("<MouseWheel>", self._on_mouse_wheel)
-
-        # Enlace tardío a subwidgets de Tkinter para capturar doble clic y foco
-        self.after(100, self._bind_internal_canvas_events)
+        self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
+        self.canvas.bind("<Configure>", lambda e: self._on_canvas_configure())
 
         # Temporizador para auto-ocultar los controles HUD
         self._hud_hide_timer: Optional[str] = None
@@ -132,19 +143,13 @@ class StreamingWindow(ctk.CTkToplevel):
         self._render_thread = threading.Thread(target=self._capture_and_stream_loop, daemon=True)
         self._render_thread.start()
 
-    def _bind_internal_canvas_events(self) -> None:
+    def _on_canvas_configure(self) -> None:
         """
-        Asegura que los eventos de doble clic y movimiento se capturen
-        en los lienzos internos de CustomTkinter.
+        Al redimensionarse la ventana o entrar a pantalla completa, repinta el fotograma actual.
         """
-        try:
-            for child in (getattr(self.lbl_canvas, "_label", None), getattr(self.lbl_canvas, "_canvas", None)):
-                if child is not None:
-                    child.bind("<Double-Button-1>", lambda e: self.toggle_fullscreen())
-                    child.bind("<Motion>", self._on_mouse_move)
-                    child.bind("<Button-1>", lambda e: self.focus_set())
-        except Exception:
-            pass
+        if self._latest_display_frame is not None and not self._display_update_pending:
+            self._display_update_pending = True
+            self.after(10, self._render_display_frame)
 
     def _build_floating_hud(self) -> None:
         """
@@ -516,20 +521,14 @@ class StreamingWindow(ctk.CTkToplevel):
 
             if not self.is_paused:
                 # 1. Captura del fotograma original
-                if self.source_type == "window":
-                    raw_frame = self.capture_engine.capture_window(self.source_id)
-                else:
-                    raw_frame = self.capture_engine.capture_monitor(self.source_id)
+                raw_frame = self.capture_engine.capture(self.source_type, self.source_id)
 
                 if raw_frame is not None and self._is_running:
-                    # 2. Composición estereoscópica SBS con esquinas redondeadas y escala FOV
-                    target_w = 1280
-                    target_h = 720
-
+                    # 2. Composición estereoscópica SBS a resolución nativa
                     sbs_frame = LensMaskGenerator.compose_preview_sbs(
                         source_frame=raw_frame,
-                        target_canvas_w=target_w,
-                        target_canvas_h=target_h,
+                        target_canvas_w=self.target_width,
+                        target_canvas_h=self.target_height,
                         aspect_mode=self.aspect_mode,
                         fit_mode=self.fit_mode,
                         corner_radius_pct=self.corner_radius_pct,
@@ -541,11 +540,13 @@ class StreamingWindow(ctk.CTkToplevel):
 
                     # 3. Transmisión al servidor web móvil si está activo
                     if self.stream_server and self.stream_server.is_running():
-                        self.stream_server.update_frame(sbs_frame, quality=75)
+                        self.stream_server.update_frame(sbs_frame, quality=self.stream_quality)
 
-                    # 4. Envío al hilo de Tkinter para despliegue en pantalla
-                    if self._is_running:
-                        self.after(0, lambda f=sbs_frame: self._update_display(f))
+                    # 4. Envío al hilo de GUI con prevención de saturación de cola (Zero Lag)
+                    self._latest_display_frame = sbs_frame
+                    if not self._display_update_pending and self._is_running:
+                        self._display_update_pending = True
+                        self.after(0, self._render_display_frame)
 
                     # 5. Cálculo de FPS
                     self.fps_counter += 1
@@ -562,26 +563,39 @@ class StreamingWindow(ctk.CTkToplevel):
             sleep_time = max(0.001, frame_interval - elapsed)
             time.sleep(sleep_time)
 
-    def _update_display(self, frame: Image.Image) -> None:
+    def _render_display_frame(self) -> None:
         """
-        Escala y coloca la imagen estereoscópica en la etiqueta de la ventana.
+        Dibuja el fotograma más reciente en el lienzo nativo sin acumular retraso ni congelamientos.
         """
-        if not self._is_running:
+        self._display_update_pending = False
+        if not self._is_running or self._latest_display_frame is None:
             return
+
         try:
             if not self.winfo_exists():
                 return
+
             win_w = max(100, self.winfo_width())
             win_h = max(100, self.winfo_height())
+            frame = self._latest_display_frame
 
             img_w, img_h = frame.size
-            ratio = min(win_w / img_w, win_h / img_h)
-            disp_w = max(40, int(img_w * ratio))
-            disp_h = max(30, int(img_h * ratio))
+            if img_w != win_w or img_h != win_h:
+                ratio = min(win_w / img_w, win_h / img_h)
+                disp_w = max(40, int(img_w * ratio))
+                disp_h = max(30, int(img_h * ratio))
+                if abs(disp_w - img_w) > 4 or abs(disp_h - img_h) > 4:
+                    frame = frame.resize((disp_w, disp_h), Image.Resampling.BILINEAR)
+            else:
+                disp_w, disp_h = win_w, win_h
 
-            ctk_img = ctk.CTkImage(light_image=frame, dark_image=frame, size=(disp_w, disp_h))
-            self.lbl_canvas.configure(image=ctk_img)
-            self.lbl_canvas.image = ctk_img
+            pos_x = (win_w - disp_w) // 2
+            pos_y = (win_h - disp_h) // 2
+
+            photo = ImageTk.PhotoImage(frame)
+            self.canvas.coords(self._canvas_img_id, pos_x, pos_y)
+            self.canvas.itemconfig(self._canvas_img_id, image=photo)
+            self._current_photo = photo
         except Exception:
             pass
 

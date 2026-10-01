@@ -158,6 +158,38 @@ class LensMaskGenerator:
 
         return x_left, y_left, x_right, y_right, eye_w, eye_h
 
+    # Cachés en memoria para reutilizar máscaras pre-renderizadas a alta velocidad (60+ FPS)
+    _mask_cache: Dict[Tuple[int, int, float, float, float], Image.Image] = {}
+    _eye_mask_cache: Dict[Tuple[int, int, float], Image.Image] = {}
+
+    @classmethod
+    def get_cached_eye_mask(
+        cls,
+        eye_w: int,
+        eye_h: int,
+        corner_radius_pct: float
+    ) -> Image.Image:
+        """
+        Devuelve o genera una máscara de escala de grises (modo L) con esquinas redondeadas
+        para la ventana de un ojo específico, reutilizando instancias en memoria para máximo rendimiento.
+        """
+        key = (eye_w, eye_h, round(corner_radius_pct, 4))
+        if key in cls._eye_mask_cache:
+            return cls._eye_mask_cache[key]
+
+        mask = Image.new("L", (eye_w, eye_h), 0)
+        draw = ImageDraw.Draw(mask)
+        max_possible_r = min(eye_w, eye_h) // 2
+        radius_px = int(max_possible_r * max(0.0, min(corner_radius_pct, 1.0)))
+
+        if radius_px > 0:
+            draw.rounded_rectangle([0, 0, eye_w, eye_h], radius=radius_px, fill=255)
+        else:
+            draw.rectangle([0, 0, eye_w, eye_h], fill=255)
+
+        cls._eye_mask_cache[key] = mask
+        return mask
+
     @classmethod
     def generate_mask_image(
         cls,
@@ -169,7 +201,7 @@ class LensMaskGenerator:
     ) -> Image.Image:
         """
         Genera una imagen RGBA negra con dos cortes transparentes y esquinas redondeadas
-        para los ojos izquierdo y derecho.
+        para los ojos izquierdo y derecho. Utiliza caché para evitar recomposiciones costosas.
         
         Args:
             width (int): Ancho total.
@@ -181,6 +213,10 @@ class LensMaskGenerator:
         Returns:
             PIL.Image.Image: Máscara en modo RGBA.
         """
+        key = (width, height, round(corner_radius_pct, 4), round(margin_pct, 4), round(center_gap_pct, 4))
+        if key in cls._mask_cache:
+            return cls._mask_cache[key]
+
         # Lienzo opaco completamente negro
         mask = Image.new("RGBA", (width, height), (0, 0, 0, 255))
         draw = ImageDraw.Draw(mask)
@@ -208,6 +244,7 @@ class LensMaskGenerator:
         else:
             draw.rectangle(right_box, fill=(0, 0, 0, 0))
 
+        cls._mask_cache[key] = mask
         return mask
 
     @classmethod
@@ -358,8 +395,8 @@ class LensMaskGenerator:
         Returns:
             PIL.Image.Image: Imagen final SBS lista para mostrar o guardar.
         """
-        # Lienzo base negro para la salida final
-        canvas = Image.new("RGBA", (target_canvas_w, target_canvas_h), (0, 0, 0, 255))
+        # Lienzo base negro en formato RGB directo (ultra rápido, sin conversiones RGBA intermedias)
+        canvas = Image.new("RGB", (target_canvas_w, target_canvas_h), (0, 0, 0))
 
         # Obtenemos geometría de ambos ojos
         x_l, y_l, x_r, y_r, eye_w, eye_h = cls.calculate_eye_dimensions(
@@ -384,17 +421,13 @@ class LensMaskGenerator:
             eye_left_img = fitted_frame
             eye_right_img = fitted_frame
 
-        # Pegamos el contenido en las posiciones de los ojos
-        canvas.paste(eye_left_img, (x_l, y_l))
-        canvas.paste(eye_right_img, (x_r, y_r))
+        # Si hay esquinas redondeadas, aplicamos la máscara de recorte en escala de grises
+        if corner_radius_pct > 0:
+            eye_mask = cls.get_cached_eye_mask(eye_w, eye_h, corner_radius_pct)
+            canvas.paste(eye_left_img, (x_l, y_l), eye_mask)
+            canvas.paste(eye_right_img, (x_r, y_r), eye_mask)
+        else:
+            canvas.paste(eye_left_img, (x_l, y_l))
+            canvas.paste(eye_right_img, (x_r, y_r))
 
-        # Si hay esquinas redondeadas o márgenes, superponemos la máscara óptica
-        if corner_radius_pct > 0 or margin_pct > 0 or center_gap_pct > 0:
-            mask = cls.generate_mask_image(
-                target_canvas_w, target_canvas_h, corner_radius_pct, margin_pct, center_gap_pct
-            )
-            # Combinamos la máscara alfa sobre el lienzo
-            canvas = Image.alpha_composite(canvas, mask)
-
-        # Convertimos a formato RGB final
-        return canvas.convert("RGB")
+        return canvas

@@ -119,6 +119,25 @@ class ScreenCaptureEngine:
 
         return windows_list
 
+    def capture(self, source_type: str = "monitor", source_id: Any = 1) -> Optional[Image.Image]:
+        """
+        Método de captura unificado según la fuente seleccionada ('monitor' o 'window').
+        
+        Args:
+            source_type (str): 'monitor' o 'window'.
+            source_id (Any): Índice de monitor (int) o HWND de ventana (int).
+            
+        Returns:
+            Optional[Image.Image]: Fotograma capturado en formato RGB o None si falla.
+        """
+        try:
+            if source_type == "window":
+                return self.capture_window(int(source_id))
+            else:
+                return self.capture_monitor(int(source_id))
+        except Exception:
+            return None
+
     def capture_monitor(self, monitor_index: int = 1) -> Optional[Image.Image]:
         """
         Captura un fotograma completo del monitor seleccionado a máxima velocidad.

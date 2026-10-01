@@ -13,8 +13,15 @@ import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
-from typing import Optional
+from typing import Optional, Tuple, Any
 from PIL import Image
+
+try:
+    import cv2
+    import numpy as np
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
 
 logger = logging.getLogger("VRShinecon.StreamServer")
 
@@ -37,43 +44,62 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 
 class FrameBuffer:
     """
-    Búfer de cuadros en memoria protegido por cerrojo (Lock) para distribución de streaming.
+    Búfer de cuadros en memoria multihilo de latencia ultrabaja para streaming MJPEG.
+    Permite codificación acelerada por hardware (OpenCV SIMD) y sincronización no bloqueante
+    mediante threading.Condition para evitar retrasos y congelamientos.
     """
 
     def __init__(self) -> None:
         self.frame_bytes: bytes = b""
+        self.frame_id: int = 0
         self.lock = threading.Lock()
-        self.new_frame_event = threading.Event()
+        self.condition = threading.Condition(self.lock)
 
-    def update(self, img: Image.Image, quality: int = 75) -> None:
+    def update(self, img: Any, quality: int = 80) -> None:
         """
-        Comprime la imagen a formato JPEG y actualiza el búfer global.
+        Comprime la imagen SBS a formato JPEG con alta velocidad y actualiza el búfer global.
         
         Args:
-            img (PIL.Image.Image): Imagen SBS a transmitir.
-            quality (int): Calidad de compresión JPEG (60 a 85).
+            img: Imagen SBS (PIL.Image.Image, np.ndarray o bytes JPEG ya codificados).
+            quality (int): Calidad de compresión JPEG (60 a 90).
         """
         try:
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=quality, optimize=False)
-            data = buf.getvalue()
-            with self.lock:
+            if isinstance(img, (bytes, bytearray)):
+                data = bytes(img)
+            elif HAS_CV2 and isinstance(img, np.ndarray):
+                # Codificación directa acelerada por OpenCV SIMD
+                _, enc = cv2.imencode('.jpg', img, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+                data = enc.tobytes()
+            elif HAS_CV2 and hasattr(img, "mode") and img.mode == "RGB":
+                # Conversión de PIL RGB a OpenCV BGR y codificación nativa ultrarrápida
+                arr = np.asarray(img)
+                bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                _, enc = cv2.imencode('.jpg', bgr, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+                data = enc.tobytes()
+            else:
+                # Respaldo seguro en Pillow
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=quality, optimize=False)
+                data = buf.getvalue()
+
+            with self.condition:
                 self.frame_bytes = data
-            self.new_frame_event.set()
+                self.frame_id += 1
+                self.condition.notify_all()
         except Exception as error:
             logger.warning("Error comprimiendo fotograma para streaming: %s", error)
 
-    def get_frame(self, timeout: float = 0.5) -> bytes:
+    def get_frame(self, last_id: int = -1, timeout: float = 0.5) -> Tuple[bytes, int]:
         """
-        Espera hasta que haya un nuevo fotograma disponible o venza el tiempo límite.
+        Espera hasta que haya un fotograma más reciente que last_id o venza el timeout.
         
         Returns:
-            bytes: Contenido binario del fotograma en JPEG.
+            Tuple[bytes, int]: (datos JPEG del fotograma, id de fotograma).
         """
-        self.new_frame_event.wait(timeout)
-        self.new_frame_event.clear()
-        with self.lock:
-            return self.frame_bytes
+        with self.condition:
+            if self.frame_id == last_id or not self.frame_bytes:
+                self.condition.wait(timeout)
+            return self.frame_bytes, self.frame_id
 
 
 class StreamingHTTPHandler(BaseHTTPRequestHandler):
@@ -140,6 +166,9 @@ class StreamingHTTPHandler(BaseHTTPRequestHandler):
             height: 100%;
             object-fit: contain;
             display: block;
+            image-rendering: -webkit-optimize-contrast;
+            transform: translateZ(0);
+            will-change: transform;
         }
         #fullscreen-btn {
             position: fixed;
@@ -173,6 +202,7 @@ class StreamingHTTPHandler(BaseHTTPRequestHandler):
 
     <script>
         let btn = document.getElementById('fullscreen-btn');
+        let streamImg = document.getElementById('stream-img');
         let hideTimeout;
 
         // Mantener la pantalla del celular siempre encendida (Screen Wake Lock API)
@@ -197,18 +227,41 @@ class StreamingHTTPHandler(BaseHTTPRequestHandler):
         document.addEventListener('mousemove', resetHideTimer);
         resetHideTimer();
 
+        // Doble toque rápido para alternar pantalla completa
+        let lastTap = 0;
+        document.addEventListener('touchend', (e) => {
+            if (e.target === btn) return;
+            let now = Date.now();
+            if (now - lastTap < 350 && now - lastTap > 0) {
+                toggleFullscreen();
+                e.preventDefault();
+            }
+            lastTap = now;
+        });
+
+        // Watchdog de reconexión si la red Wi-Fi sufre micro-cortes
+        let lastPing = Date.now();
+        setInterval(() => {
+            if (Date.now() - lastPing > 4000) {
+                streamImg.src = "/stream?reconnect=" + Date.now();
+                lastPing = Date.now();
+            }
+        }, 2000);
+
         function toggleFullscreen() {
             let elem = document.documentElement;
-            if (!document.fullscreenElement) {
+            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
                 if (elem.requestFullscreen) {
-                    elem.requestFullscreen();
+                    elem.requestFullscreen().catch(() => {});
                 } else if (elem.webkitRequestFullscreen) {
                     elem.webkitRequestFullscreen();
                 }
                 btn.innerText = "✕ Salir de Pantalla Completa";
             } else {
                 if (document.exitFullscreen) {
-                    document.exitFullscreen();
+                    document.exitFullscreen().catch(() => {});
+                } else if (document.webkitExitFullscreen) {
+                    document.webkitExitFullscreen();
                 }
                 btn.innerText = "📲 Pantalla Completa VR";
             }
@@ -228,8 +281,17 @@ class StreamingHTTPHandler(BaseHTTPRequestHandler):
 
     def _serve_mjpeg_stream(self) -> None:
         """
-        Transmite el flujo continuo de imágenes en formato multipart/x-mixed-replace.
+        Transmite el flujo continuo de imágenes en formato multipart/x-mixed-replace
+        con latencia ultra baja, desactivando Nagle y limitando búferes para evitar lag en Wi-Fi.
         """
+        try:
+            # Desactivar algoritmo de Nagle (envío inmediato de paquetes)
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            # Limitar búfer de socket a 64KB para evitar acumulación de fotogramas viejos en Wi-Fi
+            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+        except Exception:
+            pass
+
         self.send_response(200)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -241,11 +303,13 @@ class StreamingHTTPHandler(BaseHTTPRequestHandler):
         if self.frame_buffer is None:
             return
 
+        last_id = -1
         try:
             while True:
-                frame_data = self.frame_buffer.get_frame(timeout=0.5)
-                if not frame_data:
+                frame_data, frame_id = self.frame_buffer.get_frame(last_id=last_id, timeout=0.25)
+                if not frame_data or frame_id == last_id:
                     continue
+                last_id = frame_id
 
                 # Encabezado del bloque multipart
                 part_header = (
@@ -256,8 +320,9 @@ class StreamingHTTPHandler(BaseHTTPRequestHandler):
                 self.wfile.write(part_header)
                 self.wfile.write(frame_data)
                 self.wfile.write(b"\r\n")
+                self.wfile.flush()
 
-        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, OSError):
             # El cliente cerró la pestaña o apagó el celular
             pass
         except Exception:
@@ -317,13 +382,13 @@ class LocalStreamServer:
         """
         return self.get_stream_url()
 
-    def update_frame(self, img: Image.Image, quality: int = 75) -> None:
+    def update_frame(self, img: Any, quality: int = 80) -> None:
         """
         Envía un nuevo fotograma compuesto al búfer de streaming.
         
         Args:
-            img (PIL.Image.Image): Fotograma SBS listo para emitir.
-            quality (int): Nivel de calidad JPEG.
+            img: Fotograma SBS listo para emitir (PIL.Image.Image, np.ndarray o bytes).
+            quality (int): Nivel de calidad JPEG (60 a 90).
         """
         if self._is_running:
             self.frame_buffer.update(img, quality=quality)
